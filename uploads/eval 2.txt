@@ -1,0 +1,93 @@
+CREATE TABLE Readers(ReaderID INT primary key not null,FirstName VARCHAR(50) NOT NULL,LastName VARCHAR(50) NOT NULL, BirthDate DATE, Email VARCHAR(100) UNIQUE NOT NULL);
+CREATE TABLE Books (BookID INT PRIMARY KEY NOT NULL, Title VARCHAR(100) NOT NULL , Author VARCHAR(100) NOT NULL, Genre VARCHAR(50),TotalCopies INT CHECK(TotalCopies>0) );
+CREATE TABLE BookLoans(LoanID INT PRIMARY KEY NOT NULL, ReaderID INT, BookID INT, LoanDate DATE NOT NULL, ReturnDate DATE, FOREIGN KEY (ReaderID) REFERENCES Readers(ReaderID),  FOREIGN KEY (BookID) REFERENCES Books(BookID));
+
+select * from Readers;
+select * from Books;
+select * from BookLoans;
+
+
+SELECT R.FirstName, R.LastName
+FROM Books B 
+JOIN BookLoans BL ON B.BookID = BL.BookID
+JOIN Readers R ON BL.ReaderID = R.ReaderID
+GROUP BY R.FirstName, R.LastName
+HAVING COUNT (DISTINCT B.Genre) = ( SELECT COUNT (DISTINCT Genre) FROM Books
+);
+
+SELECT DISTINCT R.FirstName, R.LastName
+FROM Readers R
+JOIN BookLoans BL ON R.ReaderID = BL.ReaderID
+JOIN Books B ON BL.BookID = B.BookID
+JOIN ( SELECT BookID, COUNT(*) AS UnreturnedLoans FROM BookLoans WHERE ReturnDate IS NULL GROUP BY BookID) UL ON B.BookID = UL.BookID WHERE B.TotalCopies - UL.UnreturnedLoans > 5;
+
+
+SELECT R.FirstName, R.LastName, B.Title, BL.LoanDate, BL.ReturnDate
+FROM Readers R
+JOIN BookLoans BL ON R.ReaderID = BL.ReaderID
+JOIN Books B ON BL.BookID = B.BookID
+WHERE B.Author = 'John';
+
+
+CREATE VIEW ReaderDetails AS
+SELECT FirstName, LastName, Email
+FROM Readers;
+ALTER VIEW ReaderDetails AS
+SELECT FirstName, LastName, Email, CONCAT(FirstName, ' ', LastName) AS FullName
+FROM readers;
+
+CREATE VIEW BookDetails AS
+SELECT B.Title, COUNT(BL.BookID) AS TimesBorrowed
+FROM Books B
+JOIN BookLoans BL ON B.BookID = BL.BookID
+GROUP BY B.Title;
+ALTER VIEW BookDetails AS
+SELECT B.Title, COUNT(BL.BookID) AS TimesBorrowed, AVG(B.TotalCopies) AS AvgCopiesAvailable
+FROM Books B
+JOIN BookLoans BL ON B.BookID = BL.BookID
+GROUP BY B.Title;
+
+
+
+CREATE OR REPLACE TYPE book_record AS OBJECT (
+  title VARCHAR2(100),
+  times_borrowed NUMBER
+);
+CREATE OR REPLACE TYPE book_table AS TABLE OF book_record;
+CREATE OR REPLACE FUNCTION _high_demand_books
+RETURN book_table
+IS
+  CURSOR c_book_loans IS
+    SELECT BL.BookID, B.Title, COUNT(*) AS TimesBorrowed
+    FROM BookLoans BL
+    JOIN Books B ON BL.BookID = B.BookID
+    GROUP BY BL.BookID, B.Title;
+  v_result book_table := book_table();
+  v_record c_book_loans%ROWTYPE;
+  v_count NUMBER := 0;
+  e_no_books_found EXCEPTION;
+BEGIN
+  OPEN c_book_loans;
+  LOOP
+    FETCH c_book_loans INTO v_record;
+    EXIT WHEN c_book_loans%NOTFOUND;
+    IF v_record.TimesBorrowed > 10 THEN
+      v_count := v_count + 1;
+      v_result.EXTEND;
+      v_result(v_count) := book_record(v_record.Title, v_record.TimesBorrowed);
+    END IF;
+  END LOOP;
+  CLOSE c_book_loans;
+  IF v_result.COUNT = 0 THEN
+    RAISE e_no_books_found;
+  END IF;
+  RETURN v_result;
+EXCEPTION
+  WHEN e_no_books_found THEN
+    DBMS_OUTPUT.PUT_LINE('No books with more than 10 total copies borrowed found.');
+    RETURN book_table();
+  WHEN OTHERS THEN
+    DBMS_OUTPUT.PUT_LINE('An error occurred during processing: ' || SQLERRM);
+    RETURN book_table();
+END;
+
